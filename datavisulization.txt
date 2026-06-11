@@ -1,0 +1,277 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+from scipy import stats
+
+st.set_page_config(page_title="Visualizations", page_icon="")
+
+
+if "df_analysis" not in st.session_state or st.session_state.df_analysis is None:
+    st.warning(" Please upload and clean your data first!")
+    st.info(" Go to the 'Upload & Clean' page to get started.")
+    st.stop()
+
+df = st.session_state.df_analysis
+
+st.title(" Interactive Data Visualizations")
+
+st.markdown("""
+Explore your data through beautiful, interactive visualizations. Choose from various chart types to uncover patterns, trends, and insights.
+""")
+
+numeric_cols = df.select_dtypes(include="number").columns.tolist()
+categorical_cols = df.select_dtypes(include="object").columns.tolist()
+datetime_cols = df.select_dtypes(include=["datetime", "datetimetz"]).columns.tolist()
+
+
+tab1, tab2 = st.tabs([" Numerical", " Categorical"])
+
+with tab1:
+    if numeric_cols:
+        st.write("###  Numerical Data Visualizations")
+
+       
+        num_subtab1, num_subtab2, num_subtab3, num_subtab4 = st.tabs([
+            " Distribution", " Box Plots", " Density", " Statistics"
+        ])
+
+        with num_subtab1:
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                selected_hist_col = st.selectbox("Select column for histogram:", numeric_cols, key="hist")
+            with col2:
+                hist_bins = st.slider("Number of bins:", min_value=5, max_value=100, value=30, key="bins")
+
+            if selected_hist_col:
+                fig = px.histogram(
+                    df,
+                    x=selected_hist_col,
+                    nbins=hist_bins,
+                    title=f"Distribution of {selected_hist_col}",
+                    marginal="box",  
+                    color_discrete_sequence=['#636EFA']
+                )
+                fig.update_layout(showlegend=False)
+                st.plotly_chart(fig, use_container_width=True)
+
+              
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Mean", f"{df[selected_hist_col].mean():.2f}")
+                with col2:
+                    st.metric("Median", f"{df[selected_hist_col].median():.2f}")
+                with col3:
+                    st.metric("Std Dev", f"{df[selected_hist_col].std():.2f}")
+                with col4:
+                    st.metric("Skewness", f"{df[selected_hist_col].skew():.2f}")
+
+        with num_subtab2:
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                selected_box_col = st.selectbox("Select column for box plot:", numeric_cols, key="box")
+            with col2:
+                show_points = st.selectbox("Show data points:", ["outliers", "all", "none"], index=0, key="points")
+
+            if selected_box_col:
+                if show_points == "all":
+                    points = "all"
+                elif show_points == "outliers":
+                    points = "outliers"
+                else:
+                    points = False
+
+                fig = px.box(
+                    df,
+                    y=selected_box_col,
+                    title=f"Box Plot of {selected_box_col}",
+                    points=points,
+                    color_discrete_sequence=['#EF553B']
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+              
+                q1 = df[selected_box_col].quantile(0.25)
+                q3 = df[selected_box_col].quantile(0.75)
+                iqr = q3 - q1
+
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Q1 (25%)", f"{q1:.2f}")
+                with col2:
+                    st.metric("Q3 (75%)", f"{q3:.2f}")
+                with col3:
+                    st.metric("IQR", f"{iqr:.2f}")
+                with col4:
+                    outliers = ((df[selected_box_col] < (q1 - 1.5 * iqr)) |
+                              (df[selected_box_col] > (q3 + 1.5 * iqr))).sum()
+                    st.metric("Outliers", outliers)
+
+        with num_subtab3:
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                selected_density_col = st.selectbox("Select column for density plot:", numeric_cols, key="density")
+            with col2:
+                show_rug = st.checkbox("Show rug plot", value=True, key="rug")
+
+            if selected_density_col:
+                fig = px.histogram(
+                    df,
+                    x=selected_density_col,
+                    histnorm='probability density',
+                    title=f"Density Plot of {selected_density_col}",
+                    marginal="rug" if show_rug else None,
+                    color_discrete_sequence=['#00CC96']
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+                
+                data = df[selected_density_col].dropna()
+                if len(data) > 1:
+                    density = stats.gaussian_kde(data)
+                    x_vals = np.linspace(data.min(), data.max(), 100)
+                    y_vals = density(x_vals)
+
+                    fig_kde = go.Figure()
+                    fig_kde.add_trace(go.Histogram(
+                        x=data,
+                        histnorm='probability density',
+                        name='Histogram',
+                        opacity=0.7,
+                        marker_color='#00CC96'
+                    ))
+                    fig_kde.add_trace(go.Scatter(
+                        x=x_vals,
+                        y=y_vals,
+                        mode='lines',
+                        name='KDE',
+                        line=dict(color='#AB63FA', width=3)
+                    ))
+                    fig_kde.update_layout(
+                        title=f"Kernel Density Estimation of {selected_density_col}",
+                        xaxis_title=selected_density_col,
+                        yaxis_title="Density"
+                    )
+                    st.plotly_chart(fig_kde, use_container_width=True)
+
+        with num_subtab4:
+            st.write("###  Numerical Column Statistics")
+
+            
+            selected_stats_cols = st.multiselect(
+                "Select columns to compare:",
+                numeric_cols,
+                default=numeric_cols[:min(3, len(numeric_cols))],
+                key="stats_cols"
+            )
+
+            if selected_stats_cols:
+                
+                stats_df = df[selected_stats_cols].describe().T
+                stats_df['skewness'] = df[selected_stats_cols].skew()
+                stats_df['kurtosis'] = df[selected_stats_cols].kurtosis()
+
+                
+                stats_df = stats_df.rename(columns={
+                    'count': 'Count',
+                    'mean': 'Mean',
+                    'std': 'Std Dev',
+                    'min': 'Min',
+                    '25%': 'Q1',
+                    '50%': 'Median',
+                    '75%': 'Q3',
+                    'max': 'Max'
+                })
+
+                st.dataframe(stats_df.round(2), use_container_width=True)
+
+                
+                if len(selected_stats_cols) > 1:
+                    means = df[selected_stats_cols].mean()
+                    fig = px.bar(
+                        x=means.index,
+                        y=means.values,
+                        title="Mean Values Comparison",
+                        labels={'x': 'Column', 'y': 'Mean Value'},
+                        color_discrete_sequence=['#FFA15A']
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    
+                    cv = (df[selected_stats_cols].std() / df[selected_stats_cols].mean().abs()) * 100
+                    fig_cv = px.bar(
+                        x=cv.index,
+                        y=cv.values,
+                        title="Coefficient of Variation (%)",
+                        labels={'x': 'Column', 'y': 'CV (%)'},
+                        color_discrete_sequence=['#19D3F3']
+                    )
+                    st.plotly_chart(fig_cv, use_container_width=True)
+    else:
+        st.info("No numerical columns available for visualization.")
+
+with tab2:
+    if categorical_cols:
+        st.write("###  Categorical Data Visualizations")
+
+        cat_subtab1, cat_subtab2, cat_subtab3 = st.tabs([
+            " Bar Charts", "🥧 Pie Charts", " Frequency Tables"
+        ])
+
+        with cat_subtab1:
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                selected_bar_col = st.selectbox("Select categorical column:", categorical_cols, key="bar")
+            with col2:
+                top_n = st.slider("Show top N categories:", min_value=5, max_value=20, value=10, key="top_n")
+
+            if selected_bar_col:
+                
+                top_categories = df[selected_bar_col].value_counts().head(top_n)
+                fig = px.bar(
+                    x=top_categories.index,
+                    y=top_categories.values,
+                    title=f"Top {top_n} Categories in {selected_bar_col}",
+                    labels={'x': selected_bar_col, 'y': 'Count'},
+                    color_discrete_sequence=['#636EFA']
+                )
+                fig.update_layout(xaxis_tickangle=-45)
+                st.plotly_chart(fig, use_container_width=True)
+
+        with cat_subtab2:
+            selected_pie_col = st.selectbox("Select categorical column for pie chart:", categorical_cols, key="pie")
+            if selected_pie_col:
+                
+                top_categories = df[selected_pie_col].value_counts().head(10)
+                fig = px.pie(
+                    values=top_categories.values,
+                    names=top_categories.index,
+                    title=f"Distribution of {selected_pie_col}"
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+        with cat_subtab3:
+            selected_freq_col = st.selectbox("Select column for frequency table:", categorical_cols, key="freq")
+            if selected_freq_col:
+                freq_df = df[selected_freq_col].value_counts().reset_index()
+                freq_df.columns = [selected_freq_col, 'Frequency']
+                freq_df['Percentage'] = (freq_df['Frequency'] / len(df) * 100).round(2)
+
+                st.dataframe(freq_df, use_container_width=True)
+
+              
+                csv = freq_df.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    label=" Download Frequency Table",
+                    data=csv,
+                    file_name=f"{selected_freq_col}_frequency.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+    else:
+        st.info("No categorical columns available for visualization.")
+
+
+
+st.caption(" Powered by Plotly • Interactive charts for better insights")

@@ -1,0 +1,1603 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.express as px
+import matplotlib.pyplot as plt
+from sklearn.ensemble import IsolationForest
+from sklearn.preprocessing import StandardScaler
+
+st.set_page_config(page_title="Data Analysis", page_icon="📊")
+
+# Check if data is available
+if "df_analysis" not in st.session_state or st.session_state.df_analysis is None:
+    st.warning("⚠️ Please upload and clean your data first!")
+    st.info("👆 Go to the 'Upload & Clean' page to get started.")
+    st.stop()
+
+df = st.session_state.df_analysis
+
+st.title("📊 Data Analysis & Insights")
+
+# -------------------------------------------------
+# DATASET OVERVIEW
+# -------------------------------------------------
+st.subheader("📌 Dataset Overview")
+
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Total Rows", df.shape[0])
+col2.metric("Total Columns", df.shape[1])
+col3.metric("Numeric Columns", len(df.select_dtypes(include="number").columns))
+col4.metric("Categorical Columns", len(df.select_dtypes(include="object").columns))
+
+# Data preview
+st.subheader("👀 Data Preview")
+st.dataframe(df.head(10), use_container_width=True)
+
+# Column information
+st.subheader("📋 Column Details")
+col_info = pd.DataFrame({
+    'Column': df.columns,
+    'Data Type': df.dtypes.astype(str),
+    'Non-Null Count': df.notna().sum(),
+    'Null Count': df.isna().sum(),
+    'Missing %': (df.isna().sum() / len(df) * 100).round(2),
+    'Unique Values': df.nunique()
+})
+st.dataframe(col_info, use_container_width=True)
+
+# -------------------------------------------------
+# AUTOMATIC EDA
+# -------------------------------------------------
+st.markdown("---")
+st.subheader("🔍 Exploratory Data Analysis")
+
+# Data types summary
+st.write("### 📊 Data Types Summary")
+dtype_summary = df.dtypes.value_counts().reset_index()
+dtype_summary.columns = ['Data Type', 'Count']
+st.dataframe(dtype_summary, use_container_width=True)
+
+# Missing values analysis
+st.write("### ❓ Missing Values Analysis")
+missing_data = df.isnull().sum().reset_index()
+missing_data.columns = ['Column', 'Missing Values']
+missing_data['Missing %'] = (missing_data['Missing Values'] / len(df) * 100).round(2)
+missing_data = missing_data[missing_data['Missing Values'] > 0]
+
+if not missing_data.empty:
+    st.dataframe(missing_data, use_container_width=True)
+
+    # Missing values heatmap
+    fig = px.imshow(df.isnull(), aspect="auto",
+                   title="Missing Values Heatmap",
+                   color_continuous_scale="Reds")
+    fig.update_layout(yaxis_title="Rows", xaxis_title="Columns")
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.success("✅ No missing values found!")
+
+# Numeric summary
+numeric_cols = df.select_dtypes(include="number").columns
+if len(numeric_cols) > 0:
+    st.write("### 🔢 Numerical Summary")
+    st.dataframe(df[numeric_cols].describe().round(2), use_container_width=True)
+
+    # Distribution overview
+    st.write("### 📈 Distribution Overview")
+    selected_num_col = st.selectbox("Select numeric column for detailed analysis:",
+                                   numeric_cols, key="num_analysis")
+
+    if selected_num_col:
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.metric("Mean", f"{df[selected_num_col].mean():.2f}")
+            st.metric("Median", f"{df[selected_num_col].median():.2f}")
+            st.metric("Std Dev", f"{df[selected_num_col].std():.2f}")
+
+        with col2:
+            st.metric("Min", f"{df[selected_num_col].min():.2f}")
+            st.metric("Max", f"{df[selected_num_col].max():.2f}")
+            st.metric("Skewness", f"{df[selected_num_col].skew():.2f}")
+
+# Categorical summary
+cat_cols = df.select_dtypes(include="object").columns
+if len(cat_cols) > 0:
+    st.write("### 🏷️ Categorical Summary")
+    selected_cat_col = st.selectbox("Select categorical column:",
+                                   cat_cols, key="cat_analysis")
+
+    if selected_cat_col:
+        value_counts = df[selected_cat_col].value_counts().head(10)
+        st.dataframe(value_counts.reset_index().rename(columns={'index': selected_cat_col, selected_cat_col: 'Count'}),
+                    use_container_width=True)
+
+# -------------------------------------------------
+# DATA QUALITY ANALYSIS
+# -------------------------------------------------
+st.markdown("---")
+st.subheader("🔍 Data Quality Analysis")
+
+# Quality metrics
+total_cells = df.shape[0] * df.shape[1]
+missing_cells = df.isnull().sum().sum()
+duplicate_rows = df.duplicated().sum()
+numeric_cols = df.select_dtypes(include="number")
+negative_count = (numeric_cols < 0).sum().sum() if not numeric_cols.empty else 0
+
+col1, col2, col3, col4 = st.columns(4)
+
+with col1:
+    completeness = ((total_cells - missing_cells) / total_cells * 100)
+    st.metric("Completeness", f"{completeness:.1f}%")
+
+with col2:
+    uniqueness = ((len(df) - duplicate_rows) / len(df) * 100)
+    st.metric("Uniqueness", f"{uniqueness:.1f}%")
+
+with col3:
+    if not numeric_cols.empty:
+        validity = ((total_cells - negative_count) / total_cells * 100)
+    else:
+        validity = 100.0
+    st.metric("Validity", f"{validity:.1f}%")
+
+with col4:
+    overall_quality = (completeness + uniqueness + validity) / 3
+    st.metric("Overall Quality", f"{overall_quality:.1f}%")
+
+# Quality status
+if overall_quality >= 85:
+    st.success("🎉 Excellent data quality!")
+elif overall_quality >= 70:
+    st.warning("⚠️ Good data quality - minor improvements possible")
+else:
+    st.error("❌ Poor data quality - cleaning recommended")
+
+# -------------------------------------------------
+# DATA PROFILING & INSIGHTS
+# -------------------------------------------------
+st.markdown("---")
+st.subheader("🧠 Smart Data Profiling")
+
+# Column profiling
+st.write("### 📋 Column Profiling")
+
+profile_data = []
+for col in df.columns:
+    col_lower = col.lower()
+    dtype = df[col].dtype
+
+    # Determine role
+    if pd.api.types.is_numeric_dtype(df[col]):
+        role = "📊 Measure"
+    elif pd.api.types.is_datetime64_any_dtype(df[col]):
+        role = "📅 Time"
+    else:
+        role = "🏷️ Dimension"
+
+    # Determine semantic meaning
+    if any(x in col_lower for x in ["sales", "revenue", "amount", "price", "cost"]):
+        semantic = "💰 Monetary"
+    elif any(x in col_lower for x in ["profit", "margin", "earnings"]):
+        semantic = "📈 Profitability"
+    elif any(x in col_lower for x in ["qty", "quantity", "units", "count"]):
+        semantic = "📦 Volume"
+    elif any(x in col_lower for x in ["date", "time", "year", "month", "period"]):
+        semantic = "⏰ Temporal"
+    elif any(x in col_lower for x in ["region", "state", "country", "city", "location"]):
+        semantic = "🗺️ Geography"
+    elif any(x in col_lower for x in ["product", "item", "category", "type", "class"]):
+        semantic = "📦 Entity"
+    elif any(x in col_lower for x in ["customer", "client", "user", "id"]):
+        semantic = "👤 Identity"
+    else:
+        semantic = "❓ Other"
+
+    # Quality indicators
+    missing_pct = (df[col].isnull().sum() / len(df) * 100)
+    if missing_pct == 0:
+        quality = "✅ Perfect"
+    elif missing_pct < 5:
+        quality = "✅ Good"
+    elif missing_pct < 20:
+        quality = "⚠️ Fair"
+    else:
+        quality = "❌ Poor"
+
+    profile_data.append([col, str(dtype), role, semantic, quality])
+
+profile_df = pd.DataFrame(profile_data, columns=["Column", "Data Type", "Role", "Semantic", "Quality"])
+st.dataframe(profile_df, use_container_width=True)
+
+# -------------------------------------------------
+# SCHEMA VALIDATION
+# -------------------------------------------------
+st.markdown("---")
+st.subheader("🔍 Schema Validation")
+
+validation_issues = []
+
+# Data type validation
+st.write("### 📊 Data Type Consistency Check")
+type_issues = []
+for col in df.columns:
+    # Check if column should be numeric but has non-numeric values
+    if df[col].dtype == 'object':
+        try:
+            pd.to_numeric(df[col], errors='coerce')
+            # If conversion succeeds for most values, it might be numeric
+            numeric_count = pd.to_numeric(df[col], errors='coerce').notna().sum()
+            if numeric_count / len(df) > 0.8:  # More than 80% can be converted
+                type_issues.append(f"Column '{col}' appears to contain numeric data but is stored as text.")
+        except:
+            pass
+    # Check for date-like columns
+    elif df[col].dtype == 'object':
+        try:
+            pd.to_datetime(df[col], errors='coerce')
+            date_count = pd.to_datetime(df[col], errors='coerce').notna().sum()
+            if date_count / len(df) > 0.8:
+                type_issues.append(f"Column '{col}' appears to contain date data but is stored as text.")
+        except:
+            pass
+
+if type_issues:
+    for issue in type_issues:
+        st.warning(issue)
+        validation_issues.append(issue)
+else:
+    st.success("✅ Data types appear consistent.")
+
+# Unexpected nulls validation
+st.write("### ❓ Unexpected Nulls Check")
+null_issues = []
+for col in df.columns:
+    null_pct = df[col].isnull().sum() / len(df) * 100
+    if null_pct > 50:
+        null_issues.append(f"Column '{col}' has {null_pct:.1f}% null values - high null rate detected.")
+    elif null_pct > 0 and col.lower().endswith(('id', 'key', 'code')):
+        # Flag nulls in potential identifier columns
+        null_issues.append(f"Column '{col}' (potential identifier) has {null_pct:.1f}% null values.")
+
+if null_issues:
+    for issue in null_issues:
+        st.error(issue)
+        validation_issues.append(issue)
+else:
+    st.success("✅ No unexpected null patterns detected.")
+
+# Column completeness validation
+st.write("### 📋 Column Completeness")
+completeness_issues = []
+total_cols = len(df.columns)
+empty_cols = [col for col in df.columns if df[col].isnull().all()]
+if empty_cols:
+    completeness_issues.append(f"Found {len(empty_cols)} completely empty columns: {', '.join(empty_cols)}")
+
+# Check for potential missing columns (heuristic: if dataset has <5 columns, might be incomplete)
+if total_cols < 5:
+    completeness_issues.append(f"Dataset has only {total_cols} columns - consider if this is complete.")
+
+if completeness_issues:
+    for issue in completeness_issues:
+        st.warning(issue)
+        validation_issues.append(issue)
+else:
+    st.success("✅ Dataset appears complete.")
+
+# Overall validation summary
+st.write("### 📝 Validation Summary")
+if validation_issues:
+    st.info(f"Found {len(validation_issues)} validation issues that may need attention.")
+else:
+    st.success("🎉 Schema validation passed - data structure looks good!")
+
+# -------------------------------------------------
+# MISSING VALUE HANDLING
+# -------------------------------------------------
+st.markdown("---")
+st.subheader("🛠️ Missing Value Handling")
+
+# Check if there are missing values
+total_missing = df.isnull().sum().sum()
+if total_missing > 0:
+    st.write(f"### 📊 Missing Values Detected: {total_missing} total missing values")
+
+    # Show current missing value summary
+    missing_summary = df.isnull().sum()
+    missing_summary = missing_summary[missing_summary > 0]
+    missing_df = pd.DataFrame({
+        'Column': missing_summary.index,
+        'Missing Count': missing_summary.values,
+        'Missing %': (missing_summary.values / len(df) * 100).round(2)
+    })
+    st.dataframe(missing_df, use_container_width=True)
+
+    # Universal imputation strategy
+    if st.button("🔧 Apply Universal Missing Value Imputation", use_container_width=True):
+        df_imputed = df.copy()
+
+        # Numeric columns: median imputation
+        numeric_cols = df.select_dtypes(include="number").columns
+        for col in numeric_cols:
+            if df[col].isnull().sum() > 0:
+                median_val = df[col].median()
+                df_imputed[col] = df[col].fillna(median_val)
+                st.info(f"📊 Numeric column '{col}': imputed {df[col].isnull().sum()} missing values with median ({median_val:.2f})")
+
+        # Categorical columns: mode imputation or 'Unknown'
+        cat_cols = df.select_dtypes(include="object").columns
+        for col in cat_cols:
+            if df[col].isnull().sum() > 0:
+                mode_val = df[col].mode()
+                if not mode_val.empty:
+                    df_imputed[col] = df[col].fillna(mode_val[0])
+                    st.info(f"🏷️ Categorical column '{col}': imputed {df[col].isnull().sum()} missing values with mode ('{mode_val[0]}')")
+                else:
+                    df_imputed[col] = df[col].fillna('Unknown')
+                    st.info(f"🏷️ Categorical column '{col}': imputed {df[col].isnull().sum()} missing values with 'Unknown'")
+
+        # Datetime columns: preserve nulls (no imputation)
+        datetime_cols = df.select_dtypes(include=["datetime", "datetimetz"]).columns
+        for col in datetime_cols:
+            if df[col].isnull().sum() > 0:
+                st.info(f"📅 Datetime column '{col}': preserved {df[col].isnull().sum()} null values (no imputation applied)")
+
+        # Update session state with imputed data
+        st.session_state.df_analysis = df_imputed
+        st.success("✅ Missing value imputation completed! Data has been updated.")
+        st.rerun()  # Refresh the page to show updated data
+
+else:
+    st.success("✅ No missing values found - no imputation needed!")
+
+# -------------------------------------------------
+# DUPLICATE HANDLING
+# -------------------------------------------------
+st.markdown("---")
+st.subheader("🔄 Duplicate Record Handling")
+
+# Check for exact duplicates
+exact_duplicates = df.duplicated().sum()
+st.write(f"### 📋 Exact Duplicates: {exact_duplicates} duplicate rows found")
+
+if exact_duplicates > 0:
+    st.warning(f"⚠️ Found {exact_duplicates} exact duplicate rows.")
+
+    # Show sample of duplicates
+    duplicate_rows = df[df.duplicated(keep=False)]
+    if len(duplicate_rows) <= 10:
+        st.write("#### Sample Duplicate Rows:")
+        st.dataframe(duplicate_rows, use_container_width=True)
+    else:
+        st.write(f"#### Sample of {min(10, len(duplicate_rows))} Duplicate Rows:")
+        st.dataframe(duplicate_rows.head(10), use_container_width=True)
+
+    # Option to remove exact duplicates
+    if st.button("🗑️ Remove Exact Duplicates", use_container_width=True):
+        df_cleaned = df.drop_duplicates()
+        removed_count = len(df) - len(df_cleaned)
+        st.session_state.df_analysis = df_cleaned
+        st.success(f"✅ Removed {removed_count} exact duplicate rows. Data has been updated.")
+        st.rerun()
+else:
+    st.success("✅ No exact duplicates found!")
+
+# Check for partial duplicates (based on potential key columns)
+st.write("### 🔍 Partial Duplicate Detection")
+
+# Identify potential key columns (columns ending with 'id', 'key', 'code' or having low uniqueness)
+potential_keys = []
+for col in df.columns:
+    if col.lower().endswith(('id', 'key', 'code')) or df[col].nunique() / len(df) < 0.1:  # Less than 10% unique
+        potential_keys.append(col)
+
+if potential_keys:
+    st.write(f"#### Potential Key Columns Detected: {', '.join(potential_keys)}")
+
+    selected_key = st.selectbox("Select a key column to check for partial duplicates:",
+                               potential_keys, key="key_selection")
+
+    if selected_key:
+        # Find partial duplicates based on the selected key
+        key_duplicates = df[df.duplicated(subset=[selected_key], keep=False)]
+        partial_dup_count = len(key_duplicates)
+
+        if partial_dup_count > 0:
+            st.warning(f"⚠️ Found {partial_dup_count} rows with duplicate values in '{selected_key}' column.")
+
+            # Show sample of partial duplicates
+            if partial_dup_count <= 20:
+                st.write("#### Partial Duplicate Rows:")
+                st.dataframe(key_duplicates.sort_values(by=selected_key), use_container_width=True)
+            else:
+                st.write(f"#### Sample of {min(20, partial_dup_count)} Partial Duplicate Rows:")
+                st.dataframe(key_duplicates.sort_values(by=selected_key).head(20), use_container_width=True)
+
+            # Group by key to show duplicate groups
+            duplicate_groups = key_duplicates.groupby(selected_key).size().reset_index(name='Count')
+            duplicate_groups = duplicate_groups[duplicate_groups['Count'] > 1]
+            st.write("#### Duplicate Groups Summary:")
+            st.dataframe(duplicate_groups, use_container_width=True)
+
+            st.info("💡 Partial duplicates are flagged but not automatically removed. Review and handle manually if needed.")
+        else:
+            st.success(f"✅ No partial duplicates found in '{selected_key}' column.")
+else:
+    st.info("💡 No potential key columns detected for partial duplicate checking.")
+
+# -------------------------------------------------
+# OUTLIER DETECTION
+# -------------------------------------------------
+st.markdown("---")
+st.subheader("📈 Outlier Detection")
+
+# Get numeric columns
+numeric_cols = df.select_dtypes(include="number").columns
+
+if len(numeric_cols) > 0:
+    st.write(f"### 📊 Detected {len(numeric_cols)} numeric columns for outlier analysis")
+
+    # Method selection
+    outlier_method = st.radio("Select outlier detection method:",
+                             ["IQR Method (Recommended)", "Z-Score Method"],
+                             key="outlier_method")
+
+    # Column selection for analysis
+    selected_outlier_col = st.selectbox("Select numeric column for outlier analysis:",
+                                       numeric_cols, key="outlier_col")
+
+    if selected_outlier_col:
+        col_data = df[selected_outlier_col].dropna()  # Remove NaN for calculation
+
+        if len(col_data) > 0:
+            outliers = []
+            outlier_indices = []
+
+            if outlier_method == "IQR Method (Recommended)":
+                # IQR Method
+                Q1 = col_data.quantile(0.25)
+                Q3 = col_data.quantile(0.75)
+                IQR = Q3 - Q1
+                lower_bound = Q1 - 1.5 * IQR
+                upper_bound = Q3 + 1.5 * IQR
+
+                outlier_mask = (col_data < lower_bound) | (col_data > upper_bound)
+                outliers = col_data[outlier_mask].values
+                outlier_indices = col_data[outlier_mask].index.tolist()
+
+                st.write("#### IQR Method Results")
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Q1 (25th percentile)", f"{Q1:.2f}")
+                col2.metric("Q3 (75th percentile)", f"{Q3:.2f}")
+                col3.metric("IQR", f"{IQR:.2f}")
+
+                st.write(f"**Lower Bound:** {lower_bound:.2f}")
+                st.write(f"**Upper Bound:** {upper_bound:.2f}")
+
+            else:  # Z-Score Method
+                # Z-Score Method
+                mean_val = col_data.mean()
+                std_val = col_data.std()
+
+                z_scores = np.abs((col_data - mean_val) / std_val)
+                outlier_mask = z_scores > 3  # 3 standard deviations
+                outliers = col_data[outlier_mask].values
+                outlier_indices = col_data[outlier_mask].index.tolist()
+
+                st.write("#### Z-Score Method Results (|Z| > 3)")
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Mean", f"{mean_val:.2f}")
+                col2.metric("Std Dev", f"{std_val:.2f}")
+                col3.metric("Threshold", "3σ")
+
+            # Display outlier results
+            st.write(f"**Outliers Detected:** {len(outliers)} out of {len(col_data)} values ({len(outliers)/len(col_data)*100:.1f}%)")
+
+            if len(outliers) > 0:
+                # Show outlier summary
+                outlier_df = pd.DataFrame({
+                    'Value': outliers,
+                    'Index': outlier_indices
+                }).sort_values('Value')
+
+                if len(outlier_df) <= 20:
+                    st.write("#### Outlier Values:")
+                    st.dataframe(outlier_df, use_container_width=True)
+                else:
+                    st.write(f"#### Sample of {min(20, len(outlier_df))} Outliers:")
+                    st.dataframe(outlier_df.head(20), use_container_width=True)
+
+                # Option to remove outliers
+                if st.button(f"🗑️ Remove {len(outliers)} Outliers from '{selected_outlier_col}'", use_container_width=True):
+                    df_cleaned = df.drop(outlier_indices)
+                    st.session_state.df_analysis = df_cleaned
+                    st.success(f"✅ Removed {len(outliers)} outlier rows from '{selected_outlier_col}'. Data has been updated.")
+                    st.rerun()
+
+                # Visualization
+                st.write("#### Distribution with Outliers Highlighted")
+                fig, ax = plt.subplots(figsize=(10, 6))
+                ax.hist(col_data, bins=30, alpha=0.7, color='skyblue', edgecolor='black')
+                if len(outliers) > 0:
+                    ax.hist(outliers, bins=10, alpha=0.7, color='red', edgecolor='black', label='Outliers')
+                ax.axvline(lower_bound if outlier_method == "IQR Method (Recommended)" else mean_val - 3*std_val,
+                          color='red', linestyle='--', label='Lower Bound' if outlier_method == "IQR Method (Recommended)" else '-3σ')
+                ax.axvline(upper_bound if outlier_method == "IQR Method (Recommended)" else mean_val + 3*std_val,
+                          color='red', linestyle='--', label='Upper Bound' if outlier_method == "IQR Method (Recommended)" else '+3σ')
+                ax.set_xlabel(selected_outlier_col)
+                ax.set_ylabel('Frequency')
+                ax.legend()
+                ax.set_title(f'Outlier Detection in {selected_outlier_col}')
+                st.pyplot(fig)
+
+            else:
+                st.success(f"✅ No outliers detected in '{selected_outlier_col}' using {outlier_method}.")
+        else:
+            st.warning(f"⚠️ Column '{selected_outlier_col}' has no valid numeric values for outlier detection.")
+else:
+    st.info("💡 No numeric columns detected for outlier analysis.")
+
+# -------------------------------------------------
+# DATA DISTRIBUTION ANALYSIS & TRANSFORMATION
+# -------------------------------------------------
+st.markdown("---")
+st.subheader("📊 Data Distribution Analysis & Transformation")
+
+# Get numeric columns
+numeric_cols = df.select_dtypes(include="number").columns
+
+if len(numeric_cols) > 0:
+    st.write(f"### 📈 Detected {len(numeric_cols)} numeric columns for distribution analysis")
+
+    # Column selection for analysis
+    selected_dist_col = st.selectbox("Select numeric column for distribution analysis:",
+                                    numeric_cols, key="dist_col")
+
+    if selected_dist_col:
+        col_data = df[selected_dist_col].dropna()
+
+        if len(col_data) > 0:
+            # Distribution statistics
+            st.write("#### Distribution Statistics")
+            col1, col2, col3, col4 = st.columns(4)
+
+            with col1:
+                st.metric("Mean", f"{col_data.mean():.2f}")
+            with col2:
+                st.metric("Median", f"{col_data.median():.2f}")
+            with col3:
+                st.metric("Skewness", f"{col_data.skew():.2f}")
+            with col4:
+                st.metric("Kurtosis", f"{col_data.kurtosis():.2f}")
+
+            # Skewness analysis
+            skewness = col_data.skew()
+            if abs(skewness) > 1:
+                st.warning(f"⚠️ **Highly Skewed Distribution** (Skewness: {skewness:.2f})")
+                if skewness > 1:
+                    st.info("Right-skewed: Long tail on the right side")
+                else:
+                    st.info("Left-skewed: Long tail on the left side")
+            elif abs(skewness) > 0.5:
+                st.info(f"⚠️ **Moderately Skewed** (Skewness: {skewness:.2f})")
+            else:
+                st.success(f"✅ **Approximately Symmetric** (Skewness: {skewness:.2f})")
+
+            # Percentile analysis
+            st.write("#### Percentile Analysis")
+            percentiles = [1, 5, 10, 25, 50, 75, 90, 95, 99]
+            percentile_values = col_data.quantile([p/100 for p in percentiles])
+
+            percentile_df = pd.DataFrame({
+                'Percentile': [f"{p}th" for p in percentiles],
+                'Value': percentile_values.values.round(2)
+            })
+            st.dataframe(percentile_df.T, use_container_width=True)
+
+            # Distribution visualization
+            st.write("#### Distribution Visualization")
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+
+            # Histogram
+            ax1.hist(col_data, bins=50, alpha=0.7, color='skyblue', edgecolor='black')
+            ax1.set_title(f'Histogram of {selected_dist_col}')
+            ax1.set_xlabel(selected_dist_col)
+            ax1.set_ylabel('Frequency')
+            ax1.grid(True, alpha=0.3)
+
+            # Box plot
+            ax2.boxplot(col_data, vert=False)
+            ax2.set_title(f'Box Plot of {selected_dist_col}')
+            ax2.set_xlabel(selected_dist_col)
+            ax2.grid(True, alpha=0.3)
+
+            plt.tight_layout()
+            st.pyplot(fig)
+
+            # Transformation options for skewed data
+            if abs(skewness) > 0.5:
+                st.write("#### 🔄 Distribution Transformation Options")
+
+                transformation = st.selectbox("Select transformation method:",
+                                            ["None", "Log Transform", "Square Root Transform", "Box-Cox Transform", "Percentile Clipping"],
+                                            key="transformation")
+
+                if transformation != "None":
+                    transformed_data = col_data.copy()
+                    original_skew = skewness
+
+                    if transformation == "Log Transform":
+                        # Add small constant to handle zero/negative values
+                        min_val = col_data.min()
+                        if min_val <= 0:
+                            shift = abs(min_val) + 1
+                            transformed_data = np.log(col_data + shift)
+                            st.info(f"Applied log transform with shift of {shift} to handle non-positive values")
+                        else:
+                            transformed_data = np.log(col_data)
+
+                    elif transformation == "Square Root Transform":
+                        # Handle negative values
+                        min_val = col_data.min()
+                        if min_val < 0:
+                            shift = abs(min_val) + 0.1
+                            transformed_data = np.sqrt(col_data + shift)
+                            st.info(f"Applied square root transform with shift of {shift} to handle negative values")
+                        else:
+                            transformed_data = np.sqrt(col_data)
+
+                    elif transformation == "Box-Cox Transform":
+                        from scipy import stats
+                        # Box-Cox requires positive values
+                        min_val = col_data.min()
+                        if min_val <= 0:
+                            shift = abs(min_val) + 1
+                            boxcox_data = col_data + shift
+                            transformed_data, lambda_param = stats.boxcox(boxcox_data)
+                            st.info(f"Applied Box-Cox transform with shift of {shift} and λ={lambda_param:.3f}")
+                        else:
+                            transformed_data, lambda_param = stats.boxcox(col_data)
+                            st.info(f"Applied Box-Cox transform with λ={lambda_param:.3f}")
+
+                    elif transformation == "Percentile Clipping":
+                        lower_percentile = st.slider("Lower percentile to keep:", 0, 10, 1, key="lower_pct")
+                        upper_percentile = st.slider("Upper percentile to keep:", 90, 100, 99, key="upper_pct")
+
+                        lower_bound = col_data.quantile(lower_percentile / 100)
+                        upper_bound = col_data.quantile(upper_percentile / 100)
+
+                        transformed_data = np.clip(col_data, lower_bound, upper_bound)
+                        clipped_count = ((col_data < lower_bound) | (col_data > upper_bound)).sum()
+                        st.info(f"Clipped {clipped_count} values outside {lower_percentile}th-{upper_percentile}th percentile range")
+
+                    # Show transformation results
+                    new_skewness = transformed_data.skew()
+
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Original Skewness", f"{original_skew:.2f}")
+                    with col2:
+                        st.metric("Transformed Skewness", f"{new_skewness:.2f}")
+                    with col3:
+                        st.metric("Skewness Reduction", f"{original_skew - new_skewness:.2f}")
+
+                    # Transformation visualization
+                    st.write("#### Transformation Comparison")
+                    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+
+                    # Original distribution
+                    ax1.hist(col_data, bins=50, alpha=0.7, color='skyblue', edgecolor='black')
+                    ax1.set_title(f'Original Distribution\nSkewness: {original_skew:.2f}')
+                    ax1.set_xlabel(selected_dist_col)
+                    ax1.set_ylabel('Frequency')
+
+                    # Transformed distribution
+                    ax2.hist(transformed_data, bins=50, alpha=0.7, color='lightgreen', edgecolor='black')
+                    ax2.set_title(f'Transformed Distribution\nSkewness: {new_skewness:.2f}')
+                    ax2.set_xlabel(f'Transformed {selected_dist_col}')
+                    ax2.set_ylabel('Frequency')
+
+                    plt.tight_layout()
+                    st.pyplot(fig)
+
+                    # Apply transformation option
+                    if st.button(f"✅ Apply {transformation} to '{selected_dist_col}'", use_container_width=True):
+                        df_transformed = df.copy()
+                        df_transformed[selected_dist_col] = transformed_data
+                        st.session_state.df_analysis = df_transformed
+                        st.success(f"✅ Applied {transformation} to '{selected_dist_col}'. Data has been updated.")
+                        st.rerun()
+
+            else:
+                st.success("✅ Distribution appears well-behaved - no transformation needed.")
+        else:
+            st.warning(f"⚠️ Column '{selected_dist_col}' has no valid numeric values for distribution analysis.")
+else:
+    st.info("💡 No numeric columns detected for distribution analysis.")
+
+# -------------------------------------------------
+# ML-BASED ANOMALY DETECTION
+# -------------------------------------------------
+st.markdown("---")
+st.subheader("🤖 ML-Based Anomaly Detection")
+
+# Get numeric columns for anomaly detection
+numeric_cols = df.select_dtypes(include="number").columns
+
+if len(numeric_cols) > 0:
+    st.write(f"### 🧠 Detected {len(numeric_cols)} numeric features for anomaly detection using Isolation Forest")
+
+    # Configuration options
+    contamination = st.slider("Expected contamination ratio (% of anomalies):", 1, 20, 5, key="contamination") / 100
+    random_state = st.number_input("Random state (for reproducibility):", value=42, key="random_state")
+
+    # Prepare data for anomaly detection
+    # Use only numeric columns and handle missing values
+    df_numeric = df[numeric_cols].copy()
+
+    # Fill missing values with median for anomaly detection
+    for col in df_numeric.columns:
+        if df_numeric[col].isnull().sum() > 0:
+            df_numeric[col] = df_numeric[col].fillna(df_numeric[col].median())
+
+    # Standardize the data
+    scaler = StandardScaler()
+    df_scaled = pd.DataFrame(
+        scaler.fit_transform(df_numeric),
+        columns=df_numeric.columns,
+        index=df_numeric.index
+    )
+
+    # Apply Isolation Forest
+    if st.button("🚀 Run Isolation Forest Anomaly Detection", use_container_width=True):
+        with st.spinner("Running anomaly detection..."):
+            iso_forest = IsolationForest(
+                contamination=contamination,
+                random_state=random_state,
+                n_estimators=100
+            )
+
+            # Fit and predict anomalies
+            anomaly_scores = iso_forest.fit_predict(df_scaled)
+            anomaly_scores_raw = iso_forest.score_samples(df_scaled)
+
+            # Convert predictions: -1 for anomalies, 1 for normal
+            # Convert to more intuitive format: 1 for anomalies, 0 for normal
+            df['anomaly_flag'] = (anomaly_scores == -1).astype(int)
+            df['anomaly_score'] = -anomaly_scores_raw  # Higher scores = more anomalous
+
+            # Update session state
+            st.session_state.df_analysis = df
+
+            # Results summary
+            n_anomalies = df['anomaly_flag'].sum()
+            anomaly_pct = (n_anomalies / len(df)) * 100
+
+            st.success(f"✅ Anomaly detection completed! Found {n_anomalies} anomalies ({anomaly_pct:.1f}% of data)")
+
+            # Display results
+            st.write("#### 📊 Anomaly Detection Results")
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Total Anomalies", n_anomalies)
+            col2.metric("Anomaly Percentage", f"{anomaly_pct:.1f}%")
+            col3.metric("Normal Records", len(df) - n_anomalies)
+
+            # Anomaly score distribution
+            st.write("#### 📈 Anomaly Score Distribution")
+            fig, ax = plt.subplots(figsize=(10, 6))
+            ax.hist(df['anomaly_score'], bins=50, alpha=0.7, color='purple', edgecolor='black')
+            ax.axvline(df['anomaly_score'].quantile(0.95), color='red', linestyle='--', label='95th percentile')
+            ax.set_xlabel('Anomaly Score (Higher = More Anomalous)')
+            ax.set_ylabel('Frequency')
+            ax.set_title('Distribution of Anomaly Scores')
+            ax.legend()
+            st.pyplot(fig)
+
+            # Show top anomalies
+            st.write("#### 🔍 Top 10 Most Anomalous Records")
+            top_anomalies = df.nlargest(10, 'anomaly_score')[numeric_cols.tolist() + ['anomaly_score']]
+            st.dataframe(top_anomalies, use_container_width=True)
+
+            # Feature importance for anomalies (using feature contributions)
+            st.write("#### 📊 Feature Contributions to Anomalies")
+
+            # Calculate feature importance based on deviation from mean
+            anomaly_data = df[df['anomaly_flag'] == 1][numeric_cols]
+            normal_data = df[df['anomaly_flag'] == 0][numeric_cols]
+
+            if len(anomaly_data) > 0 and len(normal_data) > 0:
+                # Calculate mean differences
+                anomaly_means = anomaly_data.mean()
+                normal_means = normal_data.mean()
+                mean_diffs = (anomaly_means - normal_means).abs()
+
+                # Calculate effect sizes (Cohen's d)
+                anomaly_stds = anomaly_data.std()
+                normal_stds = normal_data.std()
+                pooled_std = np.sqrt((anomaly_stds**2 + normal_stds**2) / 2)
+                effect_sizes = mean_diffs / pooled_std
+
+                # Create feature importance dataframe
+                feature_importance = pd.DataFrame({
+                    'Feature': numeric_cols,
+                    'Anomaly Mean': anomaly_means.round(2),
+                    'Normal Mean': normal_means.round(2),
+                    'Mean Difference': mean_diffs.round(2),
+                    'Effect Size': effect_sizes.round(2)
+                }).sort_values('Effect Size', ascending=False)
+
+                st.dataframe(feature_importance, use_container_width=True)
+
+                # Visualize feature differences
+                st.write("#### 📊 Feature Differences: Anomalies vs Normal")
+                fig, ax = plt.subplots(figsize=(12, 6))
+                x = np.arange(len(numeric_cols))
+                width = 0.35
+
+                ax.bar(x - width/2, normal_means, width, label='Normal', alpha=0.7, color='skyblue')
+                ax.bar(x + width/2, anomaly_means, width, label='Anomalies', alpha=0.7, color='red')
+
+                ax.set_xlabel('Features')
+                ax.set_ylabel('Mean Value')
+                ax.set_title('Feature Means: Normal vs Anomalous Records')
+                ax.set_xticks(x)
+                ax.set_xticklabels(numeric_cols, rotation=45, ha='right')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
+
+                st.pyplot(fig)
+
+            # Export anomalies option
+            st.write("#### 💾 Export Anomalous Records")
+            if st.button("📥 Download Anomalous Records CSV", use_container_width=True):
+                anomalies_df = df[df['anomaly_flag'] == 1]
+                csv = anomalies_df.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    label="Download Anomalies CSV",
+                    data=csv,
+                    file_name="anomalous_records.csv",
+                    mime="text/csv"
+                )
+
+            st.info("💡 Anomalies have been flagged in the dataset with 'anomaly_flag' (1=anomaly, 0=normal) and 'anomaly_score' columns. Review flagged records before taking action.")
+
+else:
+    st.info("💡 No numeric columns detected for ML-based anomaly detection.")
+
+# -------------------------------------------------
+# LOGICAL CONSISTENCY CHECKS
+# -------------------------------------------------
+st.markdown("---")
+st.subheader("🔍 Logical Consistency Checks")
+
+consistency_issues = []
+
+# 1. Negative value detection where invalid
+st.write("### ⚠️ Negative Value Detection")
+negative_issues = []
+
+# Check numeric columns for potentially invalid negative values
+numeric_cols = df.select_dtypes(include="number").columns
+for col in numeric_cols:
+    negative_count = (df[col] < 0).sum()
+    if negative_count > 0:
+        # Check if column name suggests it shouldn't have negatives
+        col_lower = col.lower()
+        should_be_non_negative = any(keyword in col_lower for keyword in [
+            'count', 'qty', 'quantity', 'amount', 'price', 'cost', 'age', 'year',
+            'score', 'rating', 'percentage', 'percent', 'rate', 'size', 'length',
+            'width', 'height', 'weight', 'volume', 'area', 'distance', 'speed'
+        ])
+
+        if should_be_non_negative:
+            negative_pct = (negative_count / len(df)) * 100
+            negative_issues.append({
+                'column': col,
+                'negative_count': negative_count,
+                'negative_pct': negative_pct,
+                'severity': 'high' if negative_pct > 5 else 'medium'
+            })
+        else:
+            # Still flag if more than 10% are negative (unusual)
+            negative_pct = (negative_count / len(df)) * 100
+            if negative_pct > 10:
+                negative_issues.append({
+                    'column': col,
+                    'negative_count': negative_count,
+                    'negative_pct': negative_pct,
+                    'severity': 'low'
+                })
+
+if negative_issues:
+    for issue in negative_issues:
+        severity_color = {'high': '🔴', 'medium': '🟡', 'low': '🟢'}
+        st.write(f"{severity_color[issue['severity']]} **{issue['column']}**: {issue['negative_count']} negative values ({issue['negative_pct']:.1f}%)")
+        consistency_issues.append(f"Negative values in {issue['column']}: {issue['negative_count']} ({issue['negative_pct']:.1f}%)")
+else:
+    st.success("✅ No problematic negative values detected.")
+
+# 2. Invalid date detection
+st.write("### 📅 Invalid Date Detection")
+date_issues = []
+
+# Check datetime columns
+datetime_cols = df.select_dtypes(include=["datetime", "datetimetz"]).columns
+for col in datetime_cols:
+    # Check for future dates (more than 1 day ahead)
+    future_dates = (df[col] > pd.Timestamp.now() + pd.Timedelta(days=1)).sum()
+    if future_dates > 0:
+        future_pct = (future_dates / len(df)) * 100
+        date_issues.append(f"Future dates in {col}: {future_dates} ({future_pct:.1f}%)")
+        st.warning(f"⚠️ **{col}**: {future_dates} future dates detected ({future_pct:.1f}%)")
+
+    # Check for very old dates (before 1900)
+    old_dates = (df[col] < pd.Timestamp('1900-01-01')).sum()
+    if old_dates > 0:
+        old_pct = (old_dates / len(df)) * 100
+        date_issues.append(f"Very old dates in {col}: {old_dates} ({old_pct:.1f}%)")
+        st.warning(f"⚠️ **{col}**: {old_dates} dates before 1900 detected ({old_pct:.1f}%)")
+
+# Check object columns that might contain dates
+object_cols = df.select_dtypes(include="object").columns
+for col in object_cols:
+    # Try to convert to datetime to find invalid dates
+    try:
+        date_series = pd.to_datetime(df[col], errors='coerce')
+        invalid_dates = df[col].notna() & date_series.isna()
+        invalid_count = invalid_dates.sum()
+        if invalid_count > 0:
+            invalid_pct = (invalid_count / len(df)) * 100
+            date_issues.append(f"Invalid date formats in {col}: {invalid_count} ({invalid_pct:.1f}%)")
+            st.error(f"❌ **{col}**: {invalid_count} invalid date formats detected ({invalid_pct:.1f}%)")
+    except:
+        pass
+
+if not date_issues:
+    st.success("✅ No invalid dates detected.")
+
+# 3. Empty identifier detection
+st.write("### 🆔 Empty Identifier Detection")
+identifier_issues = []
+
+# Identify potential identifier columns
+potential_ids = []
+for col in df.columns:
+    col_lower = col.lower()
+    if (col_lower.endswith(('id', 'key', 'code', 'number', 'num')) or
+        col_lower in ['id', 'key', 'code', 'index', 'uuid', 'guid']):
+        potential_ids.append(col)
+
+if potential_ids:
+    st.write(f"#### Potential Identifier Columns: {', '.join(potential_ids)}")
+
+    for col in potential_ids:
+        # Check for null/empty values in identifier columns
+        if df[col].dtype == 'object':
+            empty_count = df[col].isin(['', ' ', 'null', 'NULL', 'None', 'none', np.nan]).sum()
+        else:
+            empty_count = df[col].isna().sum()
+
+        if empty_count > 0:
+            empty_pct = (empty_count / len(df)) * 100
+            severity = 'high' if empty_pct > 1 else 'medium'
+            severity_color = {'high': '🔴', 'medium': '🟡'}
+
+            identifier_issues.append(f"Empty identifiers in {col}: {empty_count} ({empty_pct:.1f}%)")
+            st.write(f"{severity_color[severity]} **{col}**: {empty_count} empty/missing identifiers ({empty_pct:.1f}%)")
+
+            # Show sample of empty identifiers
+            if empty_count <= 10:
+                empty_sample = df[df[col].isin(['', ' ', 'null', 'NULL', 'None', 'none']) | df[col].isna()].head(5)
+                if not empty_sample.empty:
+                    st.write(f"Sample empty identifiers in {col}:")
+                    st.dataframe(empty_sample[[col]], use_container_width=False)
+
+else:
+    st.info("💡 No potential identifier columns detected.")
+
+if not identifier_issues:
+    st.success("✅ No empty identifier issues detected.")
+
+# 4. Range and logical bounds checking
+st.write("### 📏 Range & Bounds Checking")
+range_issues = []
+
+# Check for values that seem out of reasonable bounds
+for col in numeric_cols:
+    col_data = df[col].dropna()
+    if len(col_data) > 0:
+        # Check for extremely large values (more than 1000x the median)
+        median_val = col_data.median()
+        if median_val != 0:
+            extreme_high = (col_data > median_val * 1000).sum()
+            extreme_low = (col_data < median_val * -1000).sum()
+
+            if extreme_high > 0:
+                extreme_pct = (extreme_high / len(df)) * 100
+                range_issues.append(f"Extremely high values in {col}: {extreme_high} ({extreme_pct:.1f}%)")
+                st.warning(f"⚠️ **{col}**: {extreme_high} extremely high values detected ({extreme_pct:.1f}%)")
+
+            if extreme_low > 0:
+                extreme_pct = (extreme_low / len(df)) * 100
+                range_issues.append(f"Extremely low values in {col}: {extreme_low} ({extreme_pct:.1f}%)")
+                st.warning(f"⚠️ **{col}**: {extreme_low} extremely low values detected ({extreme_pct:.1f}%)")
+
+if not range_issues:
+    st.success("✅ No extreme value issues detected.")
+
+# Overall consistency summary
+st.write("### 📝 Consistency Check Summary")
+all_issues = negative_issues + date_issues + identifier_issues + range_issues
+
+if all_issues:
+    total_issues = len([issue for issue in all_issues if isinstance(issue, str)]) + len([issue for issue in negative_issues if isinstance(issue, dict)])
+    st.info(f"Found {total_issues} logical consistency issues that may need attention.")
+    consistency_issues.extend([issue for issue in all_issues if isinstance(issue, str)])
+else:
+    st.success("🎉 All logical consistency checks passed!")
+
+# Store consistency issues for insights
+if consistency_issues:
+    st.session_state.consistency_issues = consistency_issues
+
+# -------------------------------------------------
+# UNIFIED ANOMALY SCORING SYSTEM
+# -------------------------------------------------
+st.markdown("---")
+st.subheader("🎯 Unified Anomaly Scoring System")
+
+st.write("### 📊 Comprehensive Data Quality Assessment")
+st.info("This system combines multiple quality indicators to produce a unified anomaly score for each record, providing a holistic view of data quality without deleting any rows.")
+
+# Initialize quality metrics
+quality_metrics = {}
+
+# 1. Missing Data Score (0-100, higher is better)
+missing_cols = df.columns[df.isnull().any()]
+if len(missing_cols) > 0:
+    # Calculate missing data percentage per row
+    missing_pct_per_row = df.isnull().sum(axis=1) / len(df.columns) * 100
+    # Convert to quality score (100 - missing percentage)
+    quality_metrics['missing_data_score'] = 100 - missing_pct_per_row
+    st.write(f"✅ **Missing Data Assessment**: Analyzed {len(missing_cols)} columns with missing values")
+else:
+    quality_metrics['missing_data_score'] = pd.Series([100] * len(df), index=df.index)
+    st.write("✅ **Missing Data Assessment**: No missing values detected")
+
+# 2. Duplicate Score (0-100, higher is better)
+duplicate_rows = df.duplicated(keep=False)
+if duplicate_rows.sum() > 0:
+    # Penalize duplicate rows
+    duplicate_penalty = duplicate_rows.astype(int) * 50  # 50 point penalty for duplicates
+    quality_metrics['duplicate_score'] = 100 - duplicate_penalty
+    st.write(f"⚠️ **Duplicate Assessment**: Found {duplicate_rows.sum()} duplicate rows")
+else:
+    quality_metrics['duplicate_score'] = pd.Series([100] * len(df), index=df.index)
+    st.write("✅ **Duplicate Assessment**: No duplicates detected")
+
+# 3. Outlier Score (0-100, higher is better)
+# This is more complex as we need to check if outlier detection was run
+outlier_score_available = False
+if 'anomaly_score' in df.columns:
+    # Use ML-based anomaly score (normalize to 0-100)
+    anomaly_scores = df['anomaly_score']
+    # Normalize anomaly scores to 0-100 scale (higher = better quality)
+    min_score = anomaly_scores.min()
+    max_score = anomaly_scores.max()
+    if max_score > min_score:
+        normalized_anomaly = ((anomaly_scores - min_score) / (max_score - min_score)) * 100
+        quality_metrics['outlier_score'] = 100 - normalized_anomaly  # Invert so higher anomaly score = lower quality
+    else:
+        quality_metrics['outlier_score'] = pd.Series([100] * len(df), index=df.index)
+    outlier_score_available = True
+    st.write("✅ **Outlier Assessment**: Using ML-based anomaly detection results")
+else:
+    quality_metrics['outlier_score'] = pd.Series([100] * len(df), index=df.index)
+    st.write("ℹ️ **Outlier Assessment**: No outlier detection results available (run ML anomaly detection first)")
+
+# 4. Logical Consistency Score (0-100, higher is better)
+consistency_penalty = pd.Series([0] * len(df), index=df.index)
+
+# Check for negative values in columns that shouldn't have them
+numeric_cols = df.select_dtypes(include="number").columns
+for col in numeric_cols:
+    col_lower = col.lower()
+    should_be_non_negative = any(keyword in col_lower for keyword in [
+        'count', 'qty', 'quantity', 'amount', 'price', 'cost', 'age', 'year',
+        'score', 'rating', 'percentage', 'percent', 'rate', 'size', 'length',
+        'width', 'height', 'weight', 'volume', 'area', 'distance', 'speed'
+    ])
+
+    if should_be_non_negative:
+        negative_mask = df[col] < 0
+        consistency_penalty += negative_mask.astype(int) * 20  # 20 point penalty per violation
+
+# Check for invalid dates
+datetime_cols = df.select_dtypes(include=["datetime", "datetimetz"]).columns
+for col in datetime_cols:
+    future_dates = df[col] > pd.Timestamp.now() + pd.Timedelta(days=1)
+    old_dates = df[col] < pd.Timestamp('1900-01-01')
+    consistency_penalty += (future_dates | old_dates).astype(int) * 15  # 15 point penalty
+
+# Check for empty identifiers
+potential_ids = [col for col in df.columns if col.lower().endswith(('id', 'key', 'code', 'number', 'num')) or col.lower() in ['id', 'key', 'code', 'index', 'uuid', 'guid']]
+for col in potential_ids:
+    if df[col].dtype == 'object':
+        empty_mask = df[col].isin(['', ' ', 'null', 'NULL', 'None', 'none']) | df[col].isna()
+    else:
+        empty_mask = df[col].isna()
+    consistency_penalty += empty_mask.astype(int) * 25  # 25 point penalty for empty identifiers
+
+quality_metrics['consistency_score'] = (100 - consistency_penalty).clip(0, 100)
+
+consistency_violations = (consistency_penalty > 0).sum()
+if consistency_violations > 0:
+    st.write(f"⚠️ **Consistency Assessment**: Found {consistency_violations} records with logical consistency issues")
+else:
+    st.write("✅ **Consistency Assessment**: No logical consistency issues detected")
+
+# 5. Calculate Unified Quality Score
+st.write("### 🏆 Unified Quality Score Calculation")
+
+# Define weights for each component
+weights = {
+    'missing_data_score': 0.25,
+    'duplicate_score': 0.20,
+    'outlier_score': 0.30,
+    'consistency_score': 0.25
+}
+
+# Calculate weighted average
+unified_scores = pd.DataFrame(quality_metrics)
+df['unified_quality_score'] = (
+    unified_scores['missing_data_score'] * weights['missing_data_score'] +
+    unified_scores['duplicate_score'] * weights['duplicate_score'] +
+    unified_scores['outlier_score'] * weights['outlier_score'] +
+    unified_scores['consistency_score'] * weights['consistency_score']
+).round(2)
+
+# Update session state
+st.session_state.df_analysis = df
+
+# Display scoring weights
+st.write("#### Scoring Weights:")
+weights_df = pd.DataFrame(list(weights.items()), columns=['Component', 'Weight'])
+st.dataframe(weights_df, use_container_width=False)
+
+# Overall statistics
+st.write("#### 📈 Quality Score Distribution")
+col1, col2, col3, col4 = st.columns(4)
+
+with col1:
+    st.metric("Average Quality Score", f"{df['unified_quality_score'].mean():.1f}")
+with col2:
+    st.metric("Median Quality Score", f"{df['unified_quality_score'].median():.1f}")
+with col3:
+    st.metric("Highest Score", f"{df['unified_quality_score'].max():.1f}")
+with col4:
+    st.metric("Lowest Score", f"{df['unified_quality_score'].min():.1f}")
+
+# Quality score distribution visualization
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+
+# Histogram
+ax1.hist(df['unified_quality_score'], bins=20, alpha=0.7, color='green', edgecolor='black')
+ax1.set_title('Distribution of Unified Quality Scores')
+ax1.set_xlabel('Quality Score (0-100)')
+ax1.set_ylabel('Frequency')
+ax1.grid(True, alpha=0.3)
+
+# Box plot
+ax2.boxplot(df['unified_quality_score'], vert=False)
+ax2.set_title('Quality Score Distribution (Box Plot)')
+ax2.set_xlabel('Quality Score (0-100)')
+ax2.grid(True, alpha=0.3)
+
+plt.tight_layout()
+st.pyplot(fig)
+
+# Quality categories
+excellent_count = (df['unified_quality_score'] >= 90).sum()
+good_count = ((df['unified_quality_score'] >= 70) & (df['unified_quality_score'] < 90)).sum()
+fair_count = ((df['unified_quality_score'] >= 50) & (df['unified_quality_score'] < 70)).sum()
+poor_count = (df['unified_quality_score'] < 50).sum()
+
+st.write("#### 📊 Quality Categories Breakdown")
+categories_df = pd.DataFrame({
+    'Category': ['Excellent (90-100)', 'Good (70-89)', 'Fair (50-69)', 'Poor (0-49)'],
+    'Count': [excellent_count, good_count, fair_count, poor_count],
+    'Percentage': [
+        f"{excellent_count/len(df)*100:.1f}%",
+        f"{good_count/len(df)*100:.1f}%",
+        f"{fair_count/len(df)*100:.1f}%",
+        f"{poor_count/len(df)*100:.1f}%"
+    ]
+})
+st.dataframe(categories_df, use_container_width=True)
+
+# Show top and bottom quality records
+st.write("#### 🏅 Top 5 Highest Quality Records")
+top_records = df.nlargest(5, 'unified_quality_score')[['unified_quality_score']].head()
+st.dataframe(top_records, use_container_width=True)
+
+st.write("#### ⚠️ Top 5 Lowest Quality Records")
+bottom_records = df.nsmallest(5, 'unified_quality_score')[['unified_quality_score']].head()
+st.dataframe(bottom_records, use_container_width=True)
+
+# Component contribution analysis
+st.write("#### 📊 Component Score Contributions")
+component_means = unified_scores.mean().round(2)
+component_df = pd.DataFrame({
+    'Component': component_means.index,
+    'Average Score': component_means.values,
+    'Weight': [weights.get(comp.replace('_score', '_score'), 0) for comp in component_means.index],
+    'Weighted Contribution': (component_means.values * pd.Series([weights.get(comp.replace('_score', '_score'), 0) for comp in component_means.index])).round(2)
+})
+st.dataframe(component_df, use_container_width=True)
+
+# Export quality scores
+st.write("#### 💾 Export Quality Assessment")
+if st.button("📥 Download Quality Scores CSV", use_container_width=True):
+    quality_export = df[['unified_quality_score']].copy()
+    quality_export = quality_export.join(unified_scores)
+    csv = quality_export.to_csv().encode("utf-8")
+    st.download_button(
+        label="Download Quality Scores CSV",
+        data=csv,
+        file_name="data_quality_scores.csv",
+        mime="text/csv"
+    )
+
+st.success("✅ **Unified Anomaly Scoring Complete!** Quality scores have been added to your dataset. Higher scores (closer to 100) indicate better data quality. No rows were deleted - all records are preserved for review.")
+
+# -------------------------------------------------
+# DATA QUALITY REPORT
+# -------------------------------------------------
+st.markdown("---")
+st.subheader("📋 Data Quality Report")
+
+st.write("### 📊 Executive Summary")
+
+# Overall quality assessment
+avg_quality = df['unified_quality_score'].mean()
+quality_rating = "Excellent" if avg_quality >= 90 else "Good" if avg_quality >= 70 else "Fair" if avg_quality >= 50 else "Poor"
+
+col1, col2, col3 = st.columns(3)
+with col1:
+    st.metric("Overall Quality Rating", quality_rating)
+with col2:
+    st.metric("Average Quality Score", f"{avg_quality:.1f}/100")
+with col3:
+    st.metric("Dataset Size", f"{len(df):,} rows")
+
+# Generate comprehensive report
+st.write("### 📋 Detailed Quality Assessment")
+
+report_sections = []
+
+# 1. Dataset Overview
+report_sections.append(f"""
+## 📊 Dataset Overview
+- **Total Records**: {len(df):,}
+- **Total Features**: {len(df.columns)}
+- **Data Types**: {df.dtypes.value_counts().to_dict()}
+- **Quality Rating**: {quality_rating} ({avg_quality:.1f}/100)
+""")
+
+# 2. Missing Data Summary
+missing_cols = df.columns[df.isnull().any()]
+if len(missing_cols) > 0:
+    total_missing = df.isnull().sum().sum()
+    missing_pct = (total_missing / (len(df) * len(df.columns))) * 100
+
+    report_sections.append(f"""
+## ❓ Missing Data Analysis
+- **Total Missing Values**: {total_missing:,} ({missing_pct:.1f}% of all data)
+- **Columns with Missing Data**: {len(missing_cols)}
+- **Most Problematic Column**: {df.isnull().sum().idxmax()} ({df.isnull().sum().max()} missing values)
+
+**Missing Data Distribution:**
+{df.isnull().sum()[df.isnull().sum() > 0].to_string()}
+""")
+else:
+    report_sections.append("""
+## ✅ Missing Data Analysis
+- **Status**: No missing values detected
+- **Completeness**: 100%
+""")
+
+# 3. Duplicate Analysis
+exact_duplicates = df.duplicated().sum()
+if exact_duplicates > 0:
+    report_sections.append(f"""
+## 🔄 Duplicate Records
+- **Exact Duplicates Found**: {exact_duplicates} ({exact_duplicates/len(df)*100:.1f}%)
+- **Recommendation**: Consider removing duplicate records for cleaner analysis
+""")
+else:
+    report_sections.append("""
+## ✅ Duplicate Records
+- **Status**: No exact duplicates detected
+""")
+
+# 4. Data Type Consistency
+type_issues = []
+numeric_cols = df.select_dtypes(include="number").columns
+for col in df.columns:
+    if df[col].dtype == 'object':
+        try:
+            numeric_count = pd.to_numeric(df[col], errors='coerce').notna().sum()
+            if numeric_count / len(df) > 0.8:
+                type_issues.append(col)
+        except:
+            pass
+
+if type_issues:
+    report_sections.append(f"""
+## ⚠️ Data Type Issues
+- **Potential Type Mismatches**: {len(type_issues)} columns appear to contain numeric data but are stored as text
+- **Affected Columns**: {', '.join(type_issues)}
+- **Recommendation**: Convert these columns to numeric types for better analysis
+""")
+else:
+    report_sections.append("""
+## ✅ Data Type Consistency
+- **Status**: Data types appear appropriate for their content
+""")
+
+# 5. Outlier Analysis
+if 'anomaly_score' in df.columns:
+    n_anomalies = df['anomaly_flag'].sum()
+    anomaly_pct = (n_anomalies / len(df)) * 100
+
+    report_sections.append(f"""
+## 🤖 Anomaly Detection Results
+- **ML Anomalies Detected**: {n_anomalies} ({anomaly_pct:.1f}%)
+- **Anomaly Score Range**: {df['anomaly_score'].min():.3f} to {df['anomaly_score'].max():.3f}
+- **Detection Method**: Isolation Forest with contamination ratio of 5%
+""")
+else:
+    report_sections.append("""
+## ℹ️ Anomaly Detection
+- **Status**: ML-based anomaly detection not yet performed
+- **Recommendation**: Run anomaly detection for comprehensive outlier analysis
+""")
+
+# 6. Logical Consistency
+consistency_violations = 0
+numeric_cols = df.select_dtypes(include="number").columns
+
+# Check negative values
+for col in numeric_cols:
+    col_lower = col.lower()
+    should_be_non_negative = any(keyword in col_lower for keyword in [
+        'count', 'qty', 'quantity', 'amount', 'price', 'cost', 'age', 'year',
+        'score', 'rating', 'percentage', 'percent', 'rate', 'size', 'length',
+        'width', 'height', 'weight', 'volume', 'area', 'distance', 'speed'
+    ])
+    if should_be_non_negative:
+        consistency_violations += (df[col] < 0).sum()
+
+# Check empty identifiers
+potential_ids = [col for col in df.columns if col.lower().endswith(('id', 'key', 'code', 'number', 'num')) or col.lower() in ['id', 'key', 'code', 'index', 'uuid', 'guid']]
+for col in potential_ids:
+    if df[col].dtype == 'object':
+        consistency_violations += df[col].isin(['', ' ', 'null', 'NULL', 'None', 'none']).sum()
+    consistency_violations += df[col].isna().sum()
+
+if consistency_violations > 0:
+    report_sections.append(f"""
+## ⚠️ Logical Consistency Issues
+- **Total Violations**: {consistency_violations}
+- **Types Checked**: Negative values in non-negative fields, empty identifiers
+- **Recommendation**: Review and correct logical inconsistencies
+""")
+else:
+    report_sections.append("""
+## ✅ Logical Consistency
+- **Status**: No logical consistency violations detected
+""")
+
+# 7. ML Readiness Assessment
+ml_readiness_score = 0
+ml_factors = []
+
+# Factor 1: Missing data
+missing_pct = (df.isnull().sum().sum() / (len(df) * len(df.columns))) * 100
+if missing_pct == 0:
+    ml_readiness_score += 25
+    ml_factors.append("✅ No missing values (+25 points)")
+elif missing_pct < 5:
+    ml_readiness_score += 20
+    ml_factors.append("⚠️ Low missing data (+20 points)")
+elif missing_pct < 20:
+    ml_readiness_score += 10
+    ml_factors.append("🟡 Moderate missing data (+10 points)")
+else:
+    ml_readiness_score += 0
+    ml_factors.append("🔴 High missing data (+0 points)")
+
+# Factor 2: Data types
+numeric_pct = len(df.select_dtypes(include="number").columns) / len(df.columns) * 100
+if numeric_pct > 50:
+    ml_readiness_score += 25
+    ml_factors.append(f"✅ Good numeric feature ratio ({numeric_pct:.1f}%) (+25 points)")
+elif numeric_pct > 25:
+    ml_readiness_score += 15
+    ml_factors.append(f"⚠️ Moderate numeric features ({numeric_pct:.1f}%) (+15 points)")
+else:
+    ml_readiness_score += 5
+    ml_factors.append(f"🟡 Low numeric features ({numeric_pct:.1f}%) (+5 points)")
+
+# Factor 3: Duplicates
+duplicate_pct = (df.duplicated().sum() / len(df)) * 100
+if duplicate_pct == 0:
+    ml_readiness_score += 25
+    ml_factors.append("✅ No duplicates (+25 points)")
+elif duplicate_pct < 5:
+    ml_readiness_score += 20
+    ml_factors.append(f"⚠️ Low duplicate rate ({duplicate_pct:.1f}%) (+20 points)")
+else:
+    ml_readiness_score += 10
+    ml_factors.append(f"🟡 High duplicate rate ({duplicate_pct:.1f}%) (+10 points)")
+
+# Factor 4: Outliers/Anomalies
+if 'anomaly_flag' in df.columns:
+    anomaly_pct = (df['anomaly_flag'].sum() / len(df)) * 100
+    if anomaly_pct < 10:
+        ml_readiness_score += 25
+        ml_factors.append(f"✅ Acceptable anomaly rate ({anomaly_pct:.1f}%) (+25 points)")
+    elif anomaly_pct < 20:
+        ml_factors.append(f"⚠️ Moderate anomalies ({anomaly_pct:.1f}%) (+15 points)")
+        ml_readiness_score += 15
+    else:
+        ml_factors.append(f"🟡 High anomaly rate ({anomaly_pct:.1f}%) (+5 points)")
+        ml_readiness_score += 5
+else:
+    ml_factors.append("ℹ️ Anomalies not assessed (+0 points)")
+
+ml_readiness_rating = "Excellent" if ml_readiness_score >= 90 else "Good" if ml_readiness_score >= 70 else "Fair" if ml_readiness_score >= 50 else "Poor"
+
+report_sections.append(f"""
+## 🤖 Machine Learning Readiness Assessment
+
+**Overall ML Readiness: {ml_readiness_rating} ({ml_readiness_score}/100)**
+
+### Readiness Factors:
+""" + "\n".join([f"- {factor}" for factor in ml_factors]) + f"""
+
+### Recommendations for ML Preparation:
+{'- Data is well-prepared for ML modeling' if ml_readiness_score >= 80 else '- Consider addressing identified data quality issues before ML modeling' if ml_readiness_score >= 60 else '- Significant data cleaning recommended before ML modeling'}
+""")
+
+# 8. Actionable Recommendations
+recommendations = []
+
+if missing_cols.any():
+    recommendations.append("• **Handle Missing Values**: Use imputation strategies (median for numeric, mode for categorical)")
+
+if exact_duplicates > 0:
+    recommendations.append("• **Remove Duplicates**: Eliminate exact duplicate records to prevent model bias")
+
+if type_issues:
+    recommendations.append(f"• **Fix Data Types**: Convert {len(type_issues)} columns to appropriate numeric types")
+
+if 'anomaly_flag' in df.columns and df['anomaly_flag'].sum() > len(df) * 0.1:
+    recommendations.append("• **Review Outliers**: High anomaly rate detected - consider domain expertise for outlier treatment")
+
+if consistency_violations > 0:
+    recommendations.append("• **Address Logical Issues**: Review and correct logical consistency violations")
+
+if avg_quality < 70:
+    recommendations.append("• **Overall Quality Improvement**: Implement comprehensive data cleaning pipeline")
+
+if not recommendations:
+    recommendations.append("• **Data Quality**: Dataset appears ready for analysis - no immediate actions required")
+
+report_sections.append(f"""
+## 🎯 Actionable Recommendations
+
+""" + "\n".join(recommendations))
+
+# Display the complete report
+full_report = "\n".join(report_sections)
+st.text_area("📋 Complete Data Quality Report", full_report, height=400, key="quality_report")
+
+# Export report option
+if st.button("📥 Download Quality Report", use_container_width=True):
+    # Create a formatted text report
+    report_filename = f"data_quality_report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    with open(report_filename, 'w') as f:
+        f.write("DATA QUALITY ASSESSMENT REPORT\n")
+        f.write("=" * 50 + "\n\n")
+        f.write(f"Generated on: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+        f.write(full_report)
+
+    with open(report_filename, 'rb') as f:
+        st.download_button(
+            label="Download Report",
+            data=f,
+            file_name=report_filename,
+            mime="text/plain"
+        )
+
+st.success("✅ **Data Quality Report Generated!** This comprehensive assessment provides actionable insights for data improvement and ML readiness.")
+
+# -------------------------------------------------
+# KEY INSIGHTS
+# -------------------------------------------------
+st.markdown("---")
+st.subheader("💡 Key Insights & Recommendations")
+
+insights = []
+
+# Missing data insights
+missing_cols = df.columns[df.isnull().any()].tolist()
+if missing_cols:
+    insights.append(f"📊 **Missing Data**: {len(missing_cols)} columns have missing values. Consider imputation strategies.")
+
+# Duplicate insights
+if duplicate_rows.sum() > 0:
+    insights.append(f"🔄 **Duplicates**: Found {duplicate_rows.sum()} duplicate rows. Consider removing for cleaner analysis.")
+
+# Data type insights
+date_cols = [col for col in df.columns if pd.api.types.is_datetime64_any_dtype(df[col])]
+if date_cols:
+    insights.append(f"📅 **Time Data**: {len(date_cols)} date/time columns detected. Great for temporal analysis!")
+
+# Categorical insights
+if len(cat_cols) > 0:
+    high_cardinality = [col for col in cat_cols if df[col].nunique() > 20]
+    if high_cardinality:
+        insights.append(f"🏷️ **High Cardinality**: {len(high_cardinality)} categorical columns have many unique values. Consider grouping.")
+
+# Numeric insights
+if len(numeric_cols) > 0:
+    skewed_cols = []
+    for col in numeric_cols:
+        if abs(df[col].skew()) > 1:
+            skewed_cols.append(col)
+    if skewed_cols:
+        insights.append(f"📈 **Skewed Data**: {len(skewed_cols)} numeric columns are highly skewed. Consider transformations.")
+
+# Size insights
+if df.shape[0] > 10000:
+    insights.append(f"📏 **Large Dataset**: {df.shape[0]:,} rows detected. Analysis optimized for performance.")
+
+if not insights:
+    insights.append("✅ **Clean Dataset**: Your data looks well-structured and ready for analysis!")
+
+# Display insights
+for insight in insights:
+    st.info(insight)
+
+# -------------------------------------------------
+# EXPORT ANALYSIS
+# -------------------------------------------------
+st.markdown("---")
+st.subheader("📥 Export Analysis Results")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    if st.button("📊 Download Column Profile", use_container_width=True):
+        csv = profile_df.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="Download CSV",
+            data=csv,
+            file_name="data_profile.csv",
+            mime="text/csv"
+        )
+
+with col2:
+    if st.button("📈 Download Summary Stats", use_container_width=True):
+        summary_stats = df.describe(include='all').round(2)
+        csv = summary_stats.to_csv().encode("utf-8")
+        st.download_button(
+            label="Download CSV",
+            data=csv,
+            file_name="summary_statistics.csv",
+            mime="text/csv"
+        )

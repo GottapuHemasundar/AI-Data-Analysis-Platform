@@ -1,0 +1,393 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+import zipfile
+
+st.set_page_config(page_title="Upload & Clean Data", page_icon=":page_facing_up:")
+
+
+def load_file(uploaded_file):
+    """Load file based on type (CSV, Excel, ZIP)."""
+    df_list = []
+
+    if uploaded_file.name.endswith(".zip"):
+        with zipfile.ZipFile(uploaded_file) as z:
+            for file in z.namelist():
+                if file.endswith(".csv"):
+                    df_list.append(pd.read_csv(z.open(file)))
+                elif file.endswith(".xlsx"):
+                    df_list.append(pd.read_excel(z.open(file)))
+
+        if not df_list:
+            st.error("ZIP file does not contain CSV or Excel files")
+            return None
+
+        df = pd.concat(df_list, ignore_index=True)
+        st.success(f"ZIP uploaded successfully! {len(df_list)} file(s) merged.")
+
+    elif uploaded_file.name.endswith(".csv"):
+        df = pd.read_csv(uploaded_file)
+        st.success("CSV dataset uploaded successfully!")
+
+    else:
+        df = pd.read_excel(uploaded_file)
+        st.success("Excel dataset uploaded successfully!")
+
+    return df
+
+def clean_data(df, options):
+    """Apply cleaning operations based on user options."""
+    df_cleaned = df.copy()
+
+    # Basic cleaning
+    if options.get("remove_duplicates", True):
+        initial_rows = len(df_cleaned)
+        df_cleaned.drop_duplicates(inplace=True)
+        if len(df_cleaned) < initial_rows:
+            st.info(f"Removed {initial_rows - len(df_cleaned)} duplicate rows.")
+
+    if options.get("standardize_columns", True):
+        df_cleaned.columns = (
+            df_cleaned.columns
+            .str.strip()
+            .str.lower()
+            .str.replace(" ", "_")
+            .str.replace("[^a-z0-9_]", "", regex=True)
+        )
+        st.info("Column names standardized.")
+
+    if options.get("handle_unknowns", True):
+        df_cleaned.replace("Unknown", np.nan, inplace=True)
+        st.info("Converted 'Unknown' strings to NaN.")
+
+    if options.get("trim_spaces", True):
+        for col in df_cleaned.select_dtypes(include="object"):
+            try:
+                
+                if df_cleaned[col].dtype == 'object' and df_cleaned[col].apply(lambda x: isinstance(x, str)).all():
+                    df_cleaned[col] = df_cleaned[col].str.strip()
+            except (AttributeError, TypeError):
+           
+                pass
+        st.info("Trimmed spaces in text columns.")
+
+
+    if options.get("fix_data_types", True):
+        for col in df_cleaned.columns:
+            if "date" in col.lower() or "time" in col.lower():
+                df_cleaned[col] = pd.to_datetime(df_cleaned[col], errors="coerce")
+            else:
+                df_cleaned[col] = pd.to_numeric(df_cleaned[col], errors="ignore")
+        st.info("Data types optimized.")
+
+    if options.get("remove_negatives", True):
+        num_cols = df_cleaned.select_dtypes(include="number").columns
+        for col in num_cols:
+            negative_count = (df_cleaned[col] < 0).sum()
+            if negative_count > 0:
+                df_cleaned[col] = df_cleaned[col].where(df_cleaned[col] >= 0)
+                st.info(f"Removed {negative_count} negative values from {col}.")
+
+    
+    num_cols = df_cleaned.select_dtypes(include="number").columns
+    cat_cols = df_cleaned.select_dtypes(include="object").columns
+
+    fill_missing_num = options.get("fill_missing_num", "median")
+    if fill_missing_num != "none" and len(num_cols) > 0:
+        if fill_missing_num == "median":
+            df_cleaned[num_cols] = df_cleaned[num_cols].fillna(df_cleaned[num_cols].median())
+        elif fill_missing_num == "mean":
+            df_cleaned[num_cols] = df_cleaned[num_cols].fillna(df_cleaned[num_cols].mean())
+        elif fill_missing_num == "mode":
+            for col in num_cols:
+                mode_val = df_cleaned[col].mode()
+                if not mode_val.empty:
+                    df_cleaned[col] = df_cleaned[col].fillna(mode_val.iloc[0])
+        elif fill_missing_num == "drop":
+            df_cleaned = df_cleaned.dropna(subset=num_cols)
+        st.info(f"Missing numeric values filled using {fill_missing_num}.")
+
+    fill_missing_cat = options.get("fill_missing_cat", "Unknown")
+    if fill_missing_cat != "none" and len(cat_cols) > 0:
+        if fill_missing_cat == "Unknown":
+            df_cleaned[cat_cols] = df_cleaned[cat_cols].fillna("Unknown")
+        elif fill_missing_cat == "mode":
+            for col in cat_cols:
+                mode_val = df_cleaned[col].mode()
+                if not mode_val.empty:
+                    df_cleaned[col] = df_cleaned[col].fillna(mode_val.iloc[0])
+        elif fill_missing_cat == "drop":
+            df_cleaned = df_cleaned.dropna(subset=cat_cols)
+        st.info(f"Missing categorical values filled using {fill_missing_cat}.")
+
+    return df_cleaned
+
+def calculate_quality(df):
+    """Calculate data quality score."""
+    if len(df) == 0:
+        return 0
+
+    total_cells = df.shape[0] * df.shape[1]
+    missing = df.isnull().sum().sum()
+    duplicates = df.duplicated().sum()
+
+    numeric = df.select_dtypes(include="number")
+    negative = (numeric < 0).sum().sum() if not numeric.empty else 0
+
+    score = (
+        (1 - missing / total_cells) * 100 +
+        (1 - duplicates / len(df)) * 100 +
+        (1 - negative / total_cells) * 100
+    ) / 3
+
+    return round(score, 2)
+
+st.title("Upload & Clean Your Data")
+
+if "df_original" not in st.session_state:
+    st.session_state.df_original = None
+if "df_cleaned" not in st.session_state:
+    st.session_state.df_cleaned = None
+if "df_analysis" not in st.session_state:
+    st.session_state.df_analysis = None
+
+
+st.subheader("Upload Your Dataset")
+
+uploaded_file = st.file_uploader(
+    "Choose a file to upload",
+    type=["csv", "xlsx", "zip"],
+    help="Supported formats: CSV, Excel (.xlsx), or ZIP containing multiple files"
+)
+
+if uploaded_file is not None:
+   
+    df_original = load_file(uploaded_file)
+
+    if df_original is not None:
+        st.session_state.df_original = df_original
+        st.session_state.df_cleaned = df_original.copy()
+
+       
+        st.subheader(" Dataset Overview")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Rows", df_original.shape[0])
+        col2.metric("Columns", df_original.shape[1])
+        col3.metric("File Size", f"{len(uploaded_file.getvalue()) / 1024:.1f} KB")
+
+      
+        st.subheader(" Data Preview")
+        st.dataframe(df_original.head(10), use_container_width=True)
+
+   
+        st.subheader(" Column Information")
+        dtype_df = pd.DataFrame({
+            'Column': df_original.columns,
+            'Data Type': df_original.dtypes.astype(str),
+            'Non-Null Count': df_original.notna().sum(),
+            'Null Count': df_original.isna().sum()
+        })
+        st.dataframe(dtype_df, use_container_width=True)
+
+       
+        st.markdown("---")
+        st.subheader("🧹 Advanced Data Cleaning Options")
+
+        with st.expander(" Configure Cleaning Pipeline", expanded=True):
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                st.markdown("**Basic Cleaning**")
+                remove_duplicates = st.checkbox("Remove duplicate rows", value=True)
+                standardize_columns = st.checkbox("Standardize column names", value=True)
+                trim_spaces = st.checkbox("Trim extra spaces in text", value=True)
+                handle_unknowns = st.checkbox("Convert 'Unknown' to NaN", value=True)
+
+            with col2:
+                st.markdown("**Data Types & Values**")
+                fix_data_types = st.checkbox("Auto-fix data types", value=True)
+                remove_negatives = st.checkbox("Remove negative values", value=True)
+                fill_missing_num = st.selectbox(
+                    "Fill missing numeric values with:",
+                    ["median", "mean", "mode", "zero", "drop", "none"],
+                    index=0
+                )
+                fill_missing_cat = st.selectbox(
+                    "Fill missing categorical values with:",
+                    ["Unknown", "mode", "drop", "none"],
+                    index=0
+                )
+
+            with col3:
+                st.markdown("**Advanced Options**")
+                outlier_method = st.selectbox(
+                    "Outlier handling:",
+                    ["none", "IQR", "Z-score", "percentile"],
+                    index=0
+                )
+
+               
+                if outlier_method != "none":
+                    if outlier_method == "IQR":
+                        outlier_multiplier = st.slider("IQR Multiplier", 1.0, 3.0, 1.5, 0.1)
+                    elif outlier_method == "Z-score":
+                        outlier_threshold = st.slider("Z-score Threshold", 2.0, 5.0, 3.0, 0.1)
+                    elif outlier_method == "percentile":
+                        outlier_lower = st.slider("Lower Percentile", 0.0, 10.0, 1.0, 0.5)
+                        outlier_upper = st.slider("Upper Percentile", 90.0, 100.0, 99.0, 0.5)
+
+       
+        if st.button(" Apply Cleaning Pipeline", type="primary", use_container_width=True):
+            cleaning_options = {
+                "remove_duplicates": remove_duplicates,
+                "standardize_columns": standardize_columns,
+                "trim_spaces": trim_spaces,
+                "handle_unknowns": handle_unknowns,
+                "fix_data_types": fix_data_types,
+                "remove_negatives": remove_negatives,
+                "fill_missing_num": fill_missing_num,
+                "fill_missing_cat": fill_missing_cat,
+                "outlier_method": outlier_method
+            }
+
+            
+            if outlier_method == "IQR":
+                cleaning_options["outlier_multiplier"] = outlier_multiplier
+            elif outlier_method == "Z-score":
+                cleaning_options["outlier_threshold"] = outlier_threshold
+            elif outlier_method == "percentile":
+                cleaning_options["outlier_lower"] = outlier_lower
+                cleaning_options["outlier_upper"] = outlier_upper
+
+            df_cleaned = clean_data(st.session_state.df_original, cleaning_options)
+            st.session_state.df_cleaned = df_cleaned
+
+           
+            if outlier_method != "none":
+                num_cols = df_cleaned.select_dtypes(include="number").columns
+                if len(num_cols) > 0:
+                    for col in num_cols:
+                        if outlier_method == "IQR":
+                            Q1 = df_cleaned[col].quantile(0.25)
+                            Q3 = df_cleaned[col].quantile(0.75)
+                            IQR = Q3 - Q1
+                            lower_bound = Q1 - outlier_multiplier * IQR
+                            upper_bound = Q3 + outlier_multiplier * IQR
+                            outliers = ((df_cleaned[col] < lower_bound) | (df_cleaned[col] > upper_bound))
+                            outlier_count = outliers.sum()
+                            if outlier_count > 0:
+                                df_cleaned.loc[outliers, col] = np.nan
+                                df_cleaned[col] = df_cleaned[col].fillna(df_cleaned[col].median())
+                                st.info(f"Handled {outlier_count} outliers in {col} using IQR method.")
+
+                        elif outlier_method == "Z-score":
+                            from scipy import stats
+                            z_scores = np.abs(stats.zscore(df_cleaned[col].dropna()))
+                            outliers = z_scores > outlier_threshold
+                            outlier_count = outliers.sum()
+                            if outlier_count > 0:
+                                df_cleaned.loc[df_cleaned[col].notna() & outliers, col] = np.nan
+                                df_cleaned[col] = df_cleaned[col].fillna(df_cleaned[col].median())
+                                st.info(f"Handled {outlier_count} outliers in {col} using Z-score method.")
+
+                        elif outlier_method == "percentile":
+                            lower_bound = df_cleaned[col].quantile(outlier_lower / 100)
+                            upper_bound = df_cleaned[col].quantile(outlier_upper / 100)
+                            outliers = ((df_cleaned[col] < lower_bound) | (df_cleaned[col] > upper_bound))
+                            outlier_count = outliers.sum()
+                            if outlier_count > 0:
+                                df_cleaned.loc[outliers, col] = np.nan
+                                df_cleaned[col] = df_cleaned[col].fillna(df_cleaned[col].median())
+                                st.info(f"Handled {outlier_count} outliers in {col} using percentile method.")
+
+            st.session_state.df_cleaned = df_cleaned
+
+           
+            df_analysis = df_cleaned.copy()
+            if df_analysis.shape[0] > 50000:
+                df_analysis = df_analysis.sample(50000, random_state=42)
+                st.warning(" Large dataset detected. Using sampled data (50k rows) for analysis to maintain performance.")
+            st.session_state.df_analysis = df_analysis
+
+            st.success(" Data cleaning completed successfully!")
+
+    
+        if st.session_state.df_cleaned is not None and st.session_state.df_cleaned is not st.session_state.df_original:
+            st.markdown("---")
+            st.subheader("🧹 Cleaned Data Preview")
+
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Before Cleaning**")
+                st.metric("Rows", st.session_state.df_original.shape[0])
+                st.metric("Missing Values", st.session_state.df_original.isnull().sum().sum())
+
+            with col2:
+                st.markdown("**After Cleaning**")
+                st.metric("Rows", st.session_state.df_cleaned.shape[0])
+                st.metric("Missing Values", st.session_state.df_cleaned.isnull().sum().sum())
+
+           
+            before_quality = calculate_quality(st.session_state.df_original)
+            after_quality = calculate_quality(st.session_state.df_cleaned)
+            st.session_state.data_quality = after_quality
+
+            st.metric(
+                "Data Quality Improvement",
+                f"{after_quality:.1f}%",
+                delta=f"{after_quality - before_quality:+.1f}%"
+            )
+
+           
+            st.dataframe(st.session_state.df_cleaned.head(10), use_container_width=True)
+
+            csv = st.session_state.df_cleaned.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                label=" Download Cleaned Dataset",
+                data=csv,
+                file_name="cleaned_dataset.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+
+else:
+   
+    st.info(" Please upload a dataset to get started!")
+
+    st.markdown("""
+    ###  Supported File Types:
+    - **CSV files** (.csv) - Comma-separated values
+    - **Excel files** (.xlsx) - Microsoft Excel spreadsheets
+    - **ZIP files** (.zip) - Archives containing multiple CSV/Excel files
+
+    ###  Tips:
+    - For best results, ensure your data has headers in the first row
+    - Large files (>50MB) may take longer to process
+    - ZIP files will automatically merge all contained datasets
+    """)
+
+    
+    if st.button(" Load Sample Dataset", use_container_width=True):
+       
+        np.random.seed(42)
+        sample_data = {
+            'customer_id': range(1, 101),
+            'age': np.random.normal(35, 10, 100).astype(int),
+            'income': np.random.normal(50000, 15000, 100).astype(int),
+            'region': np.random.choice(['North', 'South', 'East', 'West'], 100),
+            'purchase_amount': np.random.exponential(200, 100),
+            'satisfaction': np.random.randint(1, 6, 100),
+            'signup_date': pd.date_range('2020-01-01', periods=100, freq='D')
+        }
+
+      
+        df_sample = pd.DataFrame(sample_data)
+        df_sample.loc[np.random.choice(100, 10), 'income'] = np.nan
+        df_sample.loc[np.random.choice(100, 5), 'region'] = 'Unknown'
+        df_sample['age'] = df_sample['age'].clip(18, 80) 
+
+        st.session_state.df_original = df_sample
+        st.session_state.df_cleaned = df_sample.copy()
+        st.success(" Sample dataset loaded! You can now explore the cleaning options above.")
+        st.rerun()
