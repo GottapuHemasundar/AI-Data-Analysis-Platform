@@ -1,0 +1,7 @@
+
+streamlit-frontend
+python-backend
+pandas-File Ingestion,Data Cleansing,: For your Categorical tab, Pandas counts how many times a category
+numpy-Calculate Statistics,Handle Missing Data,Run Outlier Math
+plotly-numerical ,categorical visulization
+google-genai api key-asking question to chatbot
